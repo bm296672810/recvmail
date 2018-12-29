@@ -8,6 +8,9 @@
 
 #include "libetpan/mailimap.h"
 
+class folderStatus;
+class imapFolder;
+
 using namespace std;
 
 enum Encoding {
@@ -21,6 +24,28 @@ enum Encoding {
                                  EncodingUUEncode = -1
 };
 
+enum IMAPFolderFlag {
+    IMAPFolderFlagNone = 0,
+    IMAPFolderFlagMarked = 1 << 0,
+    IMAPFolderFlagUnmarked = 1 << 1,
+    IMAPFolderFlagNoSelect = 1 << 2,
+    IMAPFolderFlagNoInferiors = 1 << 3,
+    IMAPFolderFlagInbox = 1 << 4,
+    IMAPFolderFlagSentMail = 1 << 5,
+    IMAPFolderFlagStarred = 1 << 6,
+    IMAPFolderFlagAllMail = 1 << 7,
+    IMAPFolderFlagTrash = 1 << 8,
+    IMAPFolderFlagDrafts = 1 << 9,
+    IMAPFolderFlagSpam = 1 << 10,
+    IMAPFolderFlagImportant = 1 << 11,
+    IMAPFolderFlagArchive = 1 << 12,
+    IMAPFolderFlagAll = IMAPFolderFlagAllMail,
+    IMAPFolderFlagJunk = IMAPFolderFlagSpam,
+    IMAPFolderFlagFlagged = IMAPFolderFlagStarred,
+    IMAPFolderFlagFolderTypeMask = IMAPFolderFlagInbox | IMAPFolderFlagSentMail | IMAPFolderFlagStarred | IMAPFolderFlagAllMail |
+    IMAPFolderFlagTrash | IMAPFolderFlagDrafts | IMAPFolderFlagSpam | IMAPFolderFlagImportant | IMAPFolderFlagArchive,
+};
+
 static int
 fetch_imap(mailimap * imap, bool identifier_is_uid, uint32_t identifier,
     struct mailimap_fetch_type * fetch_type,
@@ -29,6 +54,11 @@ fetch_imap(mailimap * imap, bool identifier_is_uid, uint32_t identifier,
 static int fetch_rfc822(mailimap * session, bool identifier_is_uid,
     uint32_t identifier, char ** result, size_t * result_len);
 
+static int resultsWithError(int r, clist * list, vector<imapFolder>& result);
+
+static bool hasError(int errorCode);
+
+static string toupper(const string& str);
 //static int fetch_imap_message(mailimap* session, uint32_t uid, char** result, size_t* result_len);
 class mailImap
 {
@@ -49,6 +79,16 @@ public:
     int getMessageByNumber(const string& folder, uint32_t num, string& data);
 
     int getMessageAttachmentByUid(const string& folder, uint32_t uid, string& partId, Encoding encoding, string& data);
+
+    virtual int getfolderStatus(const string& folder, folderStatus* fs);
+
+    virtual int fetchSubscribedFolders(vector<imapFolder>& subFolders);
+    virtual int fetchAllFolders(vector<string>& allFolders); // will use xlist if available
+
+    virtual int renameFolder(string& folder, string& otherName);
+    virtual int deleteFolder(const string& folder);
+    virtual int createFolder(const string& folder);
+
 private:
     int getMessageAttachment(const string& folder, bool isUid, uint32_t uidOrNumber, string& partId, Encoding encoding, string& data);
     int getNonDecodedMessageAttachment(const string& folder, bool isUid, uint32_t uidOrNumber, string& partId,
@@ -56,11 +96,12 @@ private:
     int getMessage(const string& folder, bool isUid, uint32_t uidOrNumber, string& data);
     void decodeData(string& data, Encoding encoding);
     int selectFolder(const string& folder);
-    int selectIfNeed(const string& folder);
-    int loginIfNeed();
-    int connectIfNeed();
+    int selectIfNeeded(const string& folder);
+    int loginIfNeeded();
+    int connectIfNeeded();
+    int fetchDelimiterIfNeeded(char defaultDelimiter, char& result);
     void init();
-    bool hasError(int errorCode);
+    
     vector<string> splictStr(const string& str, const string& sep);
 private:
     mailimap *  m_imap;
@@ -80,6 +121,7 @@ private:
 
     int         m_status;
 
+    char        m_delimiter;
     string      m_currentFolder;
 
     enum SessionStatus
@@ -142,5 +184,58 @@ enum ErrorCode {
     ErrorTiscaliSimplePassword,
 };
 
+class folderStatus
+{
+public:
+    folderStatus() { init(); }
+    ~folderStatus() {}
 
+    virtual void setUnseenCount(uint32_t unseen) { m_unseenCount = unseen; }
+    virtual uint32_t unseenCount() { return m_unseenCount; }
+
+    virtual void setMessageCount(uint32_t messages) { m_messageCount = messages; }
+    virtual uint32_t messageCount() { return m_messageCount; }
+
+    virtual void setRecentCount(uint32_t recent) { m_recentCount = recent; }
+    virtual uint32_t recentCount() { return m_recentCount; }
+
+    virtual void setUidNext(uint32_t uidNext) { m_uidNext = uidNext; }
+    virtual uint32_t uidNext() { return m_uidNext; }
+
+    virtual void setUidValidity(uint32_t uidValidity) { m_uidValidity = uidValidity; }
+    virtual uint32_t uidValidity() { return m_uidValidity; }
+
+    virtual void setHighestModSeqValue(uint64_t highestModSeqValue) { m_highestModSeqValue = highestModSeqValue; }
+    virtual uint64_t highestModSeqValue() { return m_highestModSeqValue; }
+
+private:
+    uint32_t m_unseenCount;
+    uint32_t m_messageCount;
+    uint32_t m_recentCount;
+    uint32_t m_uidNext;
+    uint32_t m_uidValidity;
+    uint64_t m_highestModSeqValue;
+
+    void init() { m_unseenCount = 0; m_messageCount = 0; m_recentCount = 0; m_uidNext = 0; m_uidValidity = 0; m_highestModSeqValue = 0; }
+};
+
+class imapFolder
+{
+public:
+    imapFolder() { init(); }
+    virtual ~imapFolder() {}
+    virtual void setPath(const string& path) { m_path = path; }
+    virtual string path() const { return m_path; }
+
+    virtual void setDelimiter(char delimiter) { m_delimiter = delimiter; }
+    virtual char delimiter() { return m_delimiter; }
+
+    virtual void setFlags(IMAPFolderFlag flags) { m_flags = flags; }
+    virtual IMAPFolderFlag flags() { return m_flags; }
+private:
+    string m_path;
+    char m_delimiter;
+    IMAPFolderFlag m_flags;
+    void init() { m_delimiter = 0; m_flags = IMAPFolderFlagNone; }
+};
 #endif
